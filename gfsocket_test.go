@@ -1,8 +1,8 @@
 package gfsocket
 
 import (
-	"testing"
 	"fmt"
+	"testing"
 	"time"
 )
 
@@ -10,9 +10,8 @@ import (
 const FREESWITCH_ADDR = "172.168.1.120:8021"
 const FREESWITCH_PASSWORD = "ClueCon"
 
-
 func TestValidAuthentication(t *testing.T) {
-	_, err := NewFS(FREESWITCH_ADDR, FREESWITCH_PASSWORD)
+	_, err := Dial(FREESWITCH_ADDR, FREESWITCH_PASSWORD)
 	if err != nil {
 		t.Errorf(err.Error())
 		return
@@ -20,7 +19,7 @@ func TestValidAuthentication(t *testing.T) {
 }
 
 func TestInvalidAuthentication(t *testing.T) {
-	_, err := NewFS(FREESWITCH_ADDR, "ClueooCon")
+	_, err := Dial(FREESWITCH_ADDR, "ClueooCon")
 	if err == nil {
 		t.Errorf("Expected not authentaction")
 		return
@@ -28,31 +27,29 @@ func TestInvalidAuthentication(t *testing.T) {
 }
 
 func TestApi(t *testing.T) {
-	fs, err := NewFS(FREESWITCH_ADDR, FREESWITCH_PASSWORD)
+	fs, err := Dial(FREESWITCH_ADDR, FREESWITCH_PASSWORD)
 	if err != nil {
 		t.Errorf("Expected  authentaction")
 		return
 	}
 
-	var apiRes ApiResponse;
+	var apiRes ApiResponse
 
-	
 	apiRes = fs.Api("originate user/notexist &hangup()")
 	if apiRes.Content != "SUBSCRIBER_ABSENT" {
 		t.Errorf("Failed originate not user")
 	}
 
-	
 }
 
 func TestCmd(t *testing.T) {
-	fs, err := NewFS(FREESWITCH_ADDR, FREESWITCH_PASSWORD)
+	fs, err := Dial(FREESWITCH_ADDR, FREESWITCH_PASSWORD)
 	if err != nil {
 		t.Errorf("Expected authentaction")
 		return
 	}
 
-	var cmdReply CommandReply;
+	var cmdReply CommandReply
 	cmdReply = fs.Cmd("exit")
 	if cmdReply.Status != "+OK" && cmdReply.Content != "bye" {
 		t.Errorf("Failed, command exit")
@@ -60,30 +57,29 @@ func TestCmd(t *testing.T) {
 }
 
 func ExampleM_HandleFunc() {
-	fs, _ := NewFS(FREESWITCH_ADDR, FREESWITCH_PASSWORD)
+	fs, _ := Dial(FREESWITCH_ADDR, FREESWITCH_PASSWORD)
 
 	var output chan string = make(chan string, 1)
-	fs.HandleChanFunc(Filter{"Content-Type", "text/disconnect-notice"}, func(fs *Connection, ch chan interface{}) {
+	fs.HandleChanFunc(Filter{"Content-Type": "text/disconnect-notice"}, func(fs *Connection, ch chan interface{}) {
 		for {
-			recv := <- ch
+			recv := <-ch
 			recv = recv
 			output <- "HANDLER_CHAN_DISCONNECT"
 		}
 	})
 
-	fs.HandleChanFunc(Filter{"Event-Name", "BACKGROUND_JOB"}, func(fs *Connection, ch chan interface{}) {
+	//wait specific event
+	fs.HandleChanFunc(Filter{"Event-Name": "BACKGROUND_JOB"}, func(fs *Connection, ch chan interface{}) {
 		for {
-			recv := <- ch
+			recv := <-ch
 			//recv = recv
 			output <- "HANDLER_BACKGROUND_JOB:" + recv.(Event).Content.Get("Job-Command")
 		}
 	})
 
-	fs.HandleFunc(Filter{"Event-Name", "API"}, func(ev interface{}) {
+	fs.HandleFunc(Filter{"Event-Name": "API"}, func(ev interface{}) {
 		output <- "HANDLER_EVENT_API:" + ev.(Event).Content.Get("Api-Command")
 	})
-
-
 
 	fs.Cmd("event plain all")
 	fs.Api("show help")
@@ -93,7 +89,6 @@ func ExampleM_HandleFunc() {
 	fs.Api("originate user/bad &hangup()")
 	time.Sleep(time.Second)
 	fmt.Println(<-output)
-
 
 	fs.BGApi("originate user/bad &hangup()", nil)
 	time.Sleep(2 * time.Second)
