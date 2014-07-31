@@ -147,9 +147,12 @@ func dispathActions(fs *Connection, header DataContent) {
 			reply_raw[strings.Index(reply_raw, " ")+1:]}
 
 	case "api/response":
-		var body string = content_body
-		fs.apiChan <- ApiResponse{string(body[0:strings.Index(body, " ")]),
-			string(body[strings.Index(body, " ")+1:])}
+		result := strings.SplitN(strings.TrimSpace(content_body), " ", 2)
+		if len(result) > 2 {
+			fs.apiChan <- ApiResponse{result[0], result[1]}
+		} else {
+			fs.apiChan <- ApiResponse{result[0], content_body}
+		}
 
 	case "auth/request":
 		fs.authenticate()
