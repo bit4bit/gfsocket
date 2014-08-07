@@ -137,7 +137,13 @@ func dispatch(fs *Connection) {
 			fmt.Println(err)
 			continue
 		}
+		if fs.debug {
+			fs.logger.Printf("==READ FROM FREESWITCH==\n")
+		}
 		dispathActions(fs, header)
+		if fs.debug {
+			fs.logger.Printf("==END READ FROM FREESWITCH==\n")
+		}
 	}
 
 }
@@ -146,6 +152,9 @@ func dispathActions(fs *Connection, header DataContent) {
 	content_length, _ := strconv.Atoi(header.Get("Content-Length"))
 
 	content_body := strings.TrimRight(string(bufferByte(fs.text.Reader.R, content_length)), "\n ")
+	if fs.debug {
+		fs.logger.Print(content_body)
+	}
 
 	switch header.Get("Content-Type") {
 	case "command/reply":
@@ -155,10 +164,11 @@ func dispathActions(fs *Connection, header DataContent) {
 
 	case "api/response":
 		result := strings.SplitN(strings.TrimSpace(content_body), " ", 2)
-		if len(result) > 2 {
+
+		if len(result) == 2 {
 			fs.apiChan <- ApiResponse{result[0], result[1]}
 		} else {
-			fs.apiChan <- ApiResponse{result[0], content_body}
+			fs.apiChan <- ApiResponse{"UNKNOWN", content_body}
 		}
 
 	case "auth/request":
