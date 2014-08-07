@@ -56,6 +56,8 @@ type Connection struct {
 
 	handlers     []HandleFunc
 	handlersChan []HandleChan
+
+	quit bool
 }
 
 type CommandReply struct {
@@ -99,6 +101,7 @@ func Dial(remoteaddr, password string) (*Connection, error) {
 		make(chan CommandReply, 1),
 		make([]HandleFunc, 0),
 		make([]HandleChan, 0),
+		false,
 	}
 
 	ev, _ := fs.recvEvent()
@@ -122,17 +125,21 @@ func Dial(remoteaddr, password string) (*Connection, error) {
 //y procesarlos segun el caso
 func dispatch(fs *Connection) {
 	defer fs.text.Close()
+
 	for {
+		if fs.quit == true {
+			break
+		}
+
 		header, err := fs.text.ReadMIMEHeader()
 
 		if err != nil {
+			fmt.Println(err)
 			continue
-		}
-		if fs.debug {
-			fmt.Println(header)
 		}
 		dispathActions(fs, header)
 	}
+
 }
 
 func dispathActions(fs *Connection, header DataContent) {
@@ -228,6 +235,12 @@ func (fs *Connection) Api(args string) ApiResponse {
 	return res
 }
 
+//Ejecuta *api* de Freeswitch
+func (fs *Connection) ApiChan(args string) chan ApiResponse {
+	fs.Send("api " + args)
+	return fs.apiChan
+}
+
 //Ejecuta *bgapi* y retorna Job-UUId
 func (fs *Connection) BGApi(args string, background_job func(interface{})) (BackgroundJob, error) {
 	fs.Send("bgapi " + args)
@@ -253,6 +266,10 @@ func (fs *Connection) Cmd(cmd string) CommandReply {
 //Envia comando raw a Freeswitch
 func (fs *Connection) Send(cmd string) {
 	fs.text.PrintfLine("%s \r\n", cmd)
+}
+
+func (fs *Connection) Close() {
+	fs.quit = true
 }
 
 func (fs *Connection) recvEvent() (Event, error) {
