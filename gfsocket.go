@@ -195,7 +195,7 @@ func dispathActions(fs *Connection, header DataContent) {
 		buf := bufio.NewReader(strings.NewReader(content_body))
 		reader := textproto.NewReader(buf)
 		ev_body_mime, _ := reader.ReadMIMEHeader()
-		ev_send := Event{header.Get("Content-Type"), ev_body_mime, content_body}
+		ev_send := Event{header.Get("Content-Type"), DataContentMIMEHeader{ev_body_mime}, content_body}
 		dispatchHandlers(fs, ev_body_mime, &ev_send)
 
 	case "text/event-json":
