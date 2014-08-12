@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/textproto"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -78,12 +79,28 @@ type DataContent interface {
 	Get(name string) string
 }
 
+type DataContentMIMEHeader struct {
+        textproto.MIMEHeader
+}
+
+func (data DataContentMIMEHeader) Get(name string) string {
+        val, err := url.QueryUnescape(data.MIMEHeader.Get(name))
+        if err != nil {
+                return data.MIMEHeader.Get(name)
+        }
+        return val
+}
+
 type DataContentJSON struct {
 	data map[string]string
 }
 
 func (data DataContentJSON) Get(name string) string {
-	return data.data[name]
+        val, err := url.QueryUnescape(data.data[name])
+        if err != nil {
+                return data.data[name]
+        }
+        return val
 }
 
 /**
