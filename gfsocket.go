@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/textproto"
 	"net/url"
@@ -80,15 +81,15 @@ type DataContent interface {
 }
 
 type DataContentMIMEHeader struct {
-        textproto.MIMEHeader
+	textproto.MIMEHeader
 }
 
 func (data DataContentMIMEHeader) Get(name string) string {
-        val, err := url.QueryUnescape(data.MIMEHeader.Get(name))
-        if err != nil {
-                return data.MIMEHeader.Get(name)
-        }
-        return val
+	val, err := url.QueryUnescape(data.MIMEHeader.Get(name))
+	if err != nil {
+		return data.MIMEHeader.Get(name)
+	}
+	return val
 }
 
 type DataContentJSON struct {
@@ -96,11 +97,40 @@ type DataContentJSON struct {
 }
 
 func (data DataContentJSON) Get(name string) string {
-        val, err := url.QueryUnescape(data.data[name])
-        if err != nil {
-                return data.data[name]
-        }
-        return val
+	val, err := url.QueryUnescape(data.data[name])
+	if err != nil {
+		return data.data[name]
+	}
+	return val
+}
+
+// Reusa conexion
+func NewConn(raw io.ReadWriteCloser, password string) (*Connection, error) {
+	conn := textproto.NewConn(raw)
+	fs := &Connection{conn, false, log.New(os.Stderr, "gfsocket_", 0),
+		password,
+		make(chan ApiResponse, 1),
+		make(chan CommandReply, 1),
+		make([]HandleFunc, 0),
+		make([]HandleChan, 0),
+		false,
+	}
+
+	ev, _ := fs.recvEvent()
+	if ev.Type == "auth/request" {
+
+		fs.text.PrintfLine("auth %s\r\n", password)
+		evAuth, _ := fs.recvEvent()
+		if evAuth.Content.Get("Reply-Text")[0:3] == "+OK" {
+			go dispatch(fs)
+			return fs, nil
+		} else {
+			return nil, textproto.ProtocolError("error authentication")
+		}
+
+	}
+
+	return nil, errors.New("error is a freeswitch?")
 }
 
 /**
