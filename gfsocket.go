@@ -7,19 +7,23 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/textproto"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
+// Evento freeswitch
 type Event struct {
 	Type       string
 	Content    DataContent
 	ContentRaw string
 }
 
+// Filter flitra eventos
 type Filter map[string]string
 
 //Verifica contenido con el filtro si no cumple
@@ -34,11 +38,13 @@ func (filter Filter) And(data DataContent) bool {
 	return true
 }
 
+//HandleFunc reacciona segun filtro
 type HandleFunc struct {
 	Filter
 	handler func(interface{})
 }
 
+//HandleChan reaccion segun filtro enviando eventos en chan
 type HandleChan struct {
 	Filter
 	handler chan interface{}
@@ -137,35 +143,22 @@ func NewConn(raw io.ReadWriteCloser, password string) (*Connection, error) {
  *Conecta a mod_event_socket de freeswitch y autentica
  */
 func Dial(remoteaddr, password string) (*Connection, error) {
-	conn, err := textproto.Dial("tcp4", remoteaddr)
+	conn, err := net.Dial("tcp", remoteaddr)
 	if err != nil {
 		return nil, err
 	}
+	return NewConn(conn, password)
+}
 
-	fs := &Connection{conn, false, log.New(os.Stderr, "gfsocket_", 0),
-		password,
-		make(chan ApiResponse, 1),
-		make(chan CommandReply, 1),
-		make([]HandleFunc, 0),
-		make([]HandleChan, 0),
-		false,
+/**
+ *Conecta a mod_event_socket de freeswitch y autentica
+ */
+func DialTimeout(remoteaddr, password string, timeout time.Duration) (*Connection, error) {
+	conn, err := net.DialTimeout("tcp", remoteaddr, timeout)
+	if err != nil {
+		return nil, err
 	}
-
-	ev, _ := fs.recvEvent()
-	if ev.Type == "auth/request" {
-
-		fs.text.PrintfLine("auth %s\r\n", password)
-		evAuth, _ := fs.recvEvent()
-		if evAuth.Content.Get("Reply-Text")[0:3] == "+OK" {
-			go dispatch(fs)
-			return fs, nil
-		} else {
-			return nil, textproto.ProtocolError("error authentication")
-		}
-
-	}
-
-	return nil, errors.New("error is a freeswitch?")
+	return NewConn(conn, password)
 }
 
 //Go Rutina, para leer mensajes de Freeswitch
