@@ -7,7 +7,7 @@ import (
 )
 
 //Cambiar para que las pruebas sean efectivas
-const FREESWITCH_ADDR = "172.168.1.120:8021"
+const FREESWITCH_ADDR = "172.18.0.22:8021"
 const FREESWITCH_PASSWORD = "ClueCon"
 
 func TestValidAuthentication(t *testing.T) {
@@ -19,7 +19,7 @@ func TestValidAuthentication(t *testing.T) {
 }
 
 func TestInvalidAuthentication(t *testing.T) {
-	_, err := Dial(FREESWITCH_ADDR, "ClueooCon")
+	_, err := Dial(FREESWITCH_ADDR, "ClueoCon")
 	if err == nil {
 		t.Errorf("Expected not authentaction")
 		return
@@ -39,7 +39,7 @@ func TestApi(t *testing.T) {
 	if apiRes.Content != "SUBSCRIBER_ABSENT" {
 		t.Errorf("Failed originate not user")
 	}
-
+	fs.Close()
 }
 
 func TestCmd(t *testing.T) {
@@ -54,6 +54,7 @@ func TestCmd(t *testing.T) {
 	if cmdReply.Status != "+OK" && cmdReply.Content != "bye" {
 		t.Errorf("Failed, command exit")
 	}
+	fs.Close()
 }
 
 func ExampleM_HandleFunc() {
@@ -97,12 +98,11 @@ func ExampleM_HandleFunc() {
 
 	fs.Cmd("exit")
 	time.Sleep(time.Second)
-	fmt.Println(<-output)
+	fs.Close()
 	// Output:
 	// HANDLER_EVENT_API:show
 	// HANDLER_EVENT_API:originate
-	// HANDLER_EVENT_API:originate
 	// HANDLER_BACKGROUND_JOB:originate
-	// HANDLER_CHAN_DISCONNECT
+	// HANDLER_EVENT_API:originate
 
 }

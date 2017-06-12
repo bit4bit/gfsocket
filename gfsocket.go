@@ -2,9 +2,9 @@ package gfsocket
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -15,6 +15,13 @@ import (
 	"strings"
 	"time"
 )
+
+var errDisconnect = errors.New("disconnected")
+
+type Package struct {
+	Type    string
+	Payload interface{}
+}
 
 // Evento freeswitch
 type Event struct {
@@ -65,7 +72,7 @@ type Connection struct {
 	handlers     []HandleFunc
 	handlersChan []HandleChan
 
-	quit bool
+	cancelFunc context.CancelFunc
 }
 
 type CommandReply struct {
@@ -111,24 +118,26 @@ func (data DataContentJSON) Get(name string) string {
 }
 
 // Reusa conexion
-func NewConn(raw io.ReadWriteCloser, password string) (*Connection, error) {
+func NewConn(cxt context.Context, raw io.ReadWriteCloser, password string) (*Connection, error) {
 	conn := textproto.NewConn(raw)
-	fs := &Connection{conn, false, log.New(os.Stderr, "gfsocket_", 0),
+	lcxt, cancelFunc := context.WithCancel(cxt)
+	fs := &Connection{conn, false,
+		log.New(os.Stderr, "gfsocket_", 0),
 		password,
 		make(chan ApiResponse, 1),
 		make(chan CommandReply, 1),
 		make([]HandleFunc, 0),
 		make([]HandleChan, 0),
-		false,
+		cancelFunc,
 	}
 
-	ev, _ := fs.recvEvent()
-	if ev.Type == "auth/request" {
+	pkg, _ := fs.recvPackage()
+	if pkg.Type == "auth/request" {
 
 		fs.text.PrintfLine("auth %s\r\n", password)
-		evAuth, _ := fs.recvEvent()
-		if evAuth.Content.Get("Reply-Text")[0:3] == "+OK" {
-			go dispatch(fs)
+		pkg, _ := fs.recvPackage()
+		if pkg.Payload.(CommandReply).Status == "+OK" {
+			go dispatch(lcxt, fs)
 			return fs, nil
 		} else {
 			return nil, textproto.ProtocolError("error authentication")
@@ -147,7 +156,7 @@ func Dial(remoteaddr, password string) (*Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewConn(conn, password)
+	return NewConn(context.Background(), conn, password)
 }
 
 /**
@@ -158,93 +167,75 @@ func DialTimeout(remoteaddr, password string, timeout time.Duration) (*Connectio
 	if err != nil {
 		return nil, err
 	}
-	return NewConn(conn, password)
+	return NewConn(context.Background(), conn, password)
 }
 
 //Go Rutina, para leer mensajes de Freeswitch
 //y procesarlos segun el caso
-func dispatch(fs *Connection) {
+func dispatch(cxt context.Context, fs *Connection) {
 	defer fs.text.Close()
 
+loop:
 	for {
-		if fs.quit == true {
-			break
-		}
+		select {
+		case <-cxt.Done():
+			break loop
+		default:
+			pkg, err := fs.recvPackage()
+			if fs.debug {
+				fs.logger.Printf("==READ FROM FREESWITCH==\n")
+			}
+			if err != nil {
+				if err == errDisconnect {
+					fs.Close()
+					break loop
+				} else {
+					panic(err)
+				}
+			}
 
-		header, err := fs.text.ReadMIMEHeader()
-
-		if err != nil {
-			fmt.Println(err)
-			continue
-		}
-		if fs.debug {
-			fs.logger.Printf("==READ FROM FREESWITCH==\n")
-		}
-		dispathActions(fs, header)
-		if fs.debug {
-			fs.logger.Printf("==END READ FROM FREESWITCH==\n")
+			dispathActions(fs, pkg)
+			if fs.debug {
+				fs.logger.Printf("==END READ FROM FREESWITCH==\n")
+			}
 		}
 	}
 
 }
 
-func dispathActions(fs *Connection, header DataContent) {
-	content_length, _ := strconv.Atoi(header.Get("Content-Length"))
+func dispathActions(fs *Connection, pkg *Package) {
 
-	content_body := strings.TrimRight(string(bufferByte(fs.text.Reader.R, content_length)), "\n ")
-	if fs.debug {
-		fs.logger.Print(content_body)
-	}
-
-	switch header.Get("Content-Type") {
+	switch pkg.Type {
+	case "text/disconnect-notice":
+		fs.Close()
 	case "command/reply":
-		reply_raw := header.Get("Reply-Text")
-		fs.cmdChan <- CommandReply{reply_raw[0:strings.Index(reply_raw, " ")],
-			reply_raw[strings.Index(reply_raw, " ")+1:]}
+		fs.cmdChan <- pkg.Payload.(CommandReply)
 
 	case "api/response":
-		result := strings.SplitN(strings.TrimSpace(content_body), " ", 2)
-
-		if len(result) == 2 {
-			fs.apiChan <- ApiResponse{result[0], result[1]}
-		} else {
-			fs.apiChan <- ApiResponse{"UNKNOWN", content_body}
-		}
+		fs.apiChan <- pkg.Payload.(ApiResponse)
 
 	case "auth/request":
 		fs.authenticate()
 
 	case "text/event-plain":
-		buf := bufio.NewReader(strings.NewReader(content_body))
-		reader := textproto.NewReader(buf)
-		ev_body_mime, _ := reader.ReadMIMEHeader()
-		ev_send := Event{header.Get("Content-Type"), DataContentMIMEHeader{ev_body_mime}, content_body}
-		dispatchHandlers(fs, ev_body_mime, &ev_send)
+		dispatchHandlers(fs, pkg.Payload.(Event))
 
-	case "text/event-json":
-		json_decode := json.NewDecoder(strings.NewReader(content_body))
-		ev_body_json := make(map[string]string)
-		json_decode.Decode(&ev_body_json)
-		ev_send := Event{header.Get("Content-Type"),
-			DataContent(DataContentJSON{ev_body_json}),
-			content_body}
-		dispatchHandlers(fs, DataContent(DataContentJSON{ev_body_json}), &ev_send)
 	default:
-		ev_send := Event{header.Get("Content-Type"), header, content_body}
-		dispatchHandlers(fs, header, &ev_send)
+		ev := pkg.Payload.(Event)
+		dispatchHandlers(fs, ev)
 	}
 }
 
-func dispatchHandlers(fs *Connection, header DataContent, ev_send *Event) {
+func dispatchHandlers(fs *Connection, ev Event) {
 	for _, handle := range fs.handlers {
-		if handle.Filter.And(header) {
-			go handle.handler(*ev_send)
+		if handle.Filter.And(ev.Content) {
+			go handle.handler(ev)
 		}
 	}
 
 	for _, handle := range fs.handlersChan {
-		if handle.Filter.And(header) {
-			handle.handler <- *ev_send
+		if handle.Filter.And(ev.Content) {
+			handle.handler <- ev
 		}
 	}
 
@@ -319,17 +310,67 @@ func (fs *Connection) Send(cmd string) {
 }
 
 func (fs *Connection) Close() {
-	fs.quit = true
+	fs.cancelFunc()
 }
 
-func (fs *Connection) recvEvent() (Event, error) {
+func (fs *Connection) recvPackage() (*Package, error) {
 	header, err := fs.text.ReadMIMEHeader()
-	ev := Event{header.Get("Content-Type"), header, ""}
+
 	if err != nil {
-		return ev, err
+		return nil, err
 	}
 
-	return ev, nil
+	content_length, _ := strconv.Atoi(header.Get("Content-Length"))
+
+	content_body := strings.TrimRight(string(bufferByte(fs.text.Reader.R, content_length)), "\n ")
+	if fs.debug {
+		fs.logger.Print(content_body)
+	}
+
+	switch header.Get("Content-Type") {
+	case "text/disconnect-notice":
+		fs.Close()
+		return nil, errDisconnect
+
+	case "command/reply":
+		reply_raw := header.Get("Reply-Text")
+		cmd := CommandReply{reply_raw[0:strings.Index(reply_raw, " ")],
+			reply_raw[strings.Index(reply_raw, " ")+1:]}
+		return &Package{"command/reply", cmd}, nil
+
+	case "api/response":
+		result := strings.SplitN(strings.TrimSpace(content_body), " ", 2)
+		var api ApiResponse
+		if len(result) == 2 {
+			api = ApiResponse{result[0], result[1]}
+		} else {
+			api = ApiResponse{"UNKNOWN", content_body}
+		}
+		return &Package{"api/response", api}, nil
+
+	case "auth/request":
+		return &Package{"auth/request",
+			Event{"auth/request", nil, ""}}, nil
+
+	case "text/event-plain":
+		buf := bufio.NewReader(strings.NewReader(content_body))
+		reader := textproto.NewReader(buf)
+		ev_body_mime, _ := reader.ReadMIMEHeader()
+		ev_send := Event{header.Get("Content-Type"), DataContentMIMEHeader{ev_body_mime}, content_body}
+		return &Package{"text/event-plain", ev_send}, nil
+
+	case "text/event-json":
+		json_decode := json.NewDecoder(strings.NewReader(content_body))
+		ev_body_json := make(map[string]string)
+		json_decode.Decode(&ev_body_json)
+		ev_send := Event{header.Get("Content-Type"),
+			DataContent(DataContentJSON{ev_body_json}),
+			content_body}
+		return &Package{"text/event-plain", ev_send}, nil
+	default:
+		ev := Event{header.Get("Content-Type"), header, content_body}
+		return &Package{header.Get("Content-Type"), ev}, nil
+	}
 }
 
 //Crea un array de byte, tomados del Buffer (bufio)
